@@ -1,0 +1,7 @@
+{
+    "domain": "127.0.0.1",
+    "port": 60102,
+    "token": "discord_bot_token",
+    "temp_directory_name": "temp",
+    "expiry_seconds": 18000
+}

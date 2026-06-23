@@ -1,0 +1,40 @@
+# === Operating System Files ===
+.DS_Store
+Thumbs.db
+*.local
+
+# === Go (Golang) ===
+# 컴파일된 바이너리 실행 파일 (윈도우용 .exe 및 리눅스/라즈베리파이용 실행 파일)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+nohup.out
+bot.log
+ShimBot-D
+ShimBot-D-testserver
+ShimBot-D.exe
+ShimBot-D-testserver.exe
+
+# === Python ===
+# 가상환경 폴더 (윈도우/리눅스 환경이 서로 다르므로 절대 올리면 안 됨)
+.venv/
+venv/
+ENV/
+env/
+
+# 파이썬 캐시 파일
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# === Application / Media Outputs ===
+# 유튜브 다운로드 시 생성되는 임시 폴더 및 파일 (설정 파일의 TempDirectoryName 기준)
+# 만약 임시 폴더 이름이 'temp'가 아니라 다른 것이라면 해당 이름으로 변경해주세요.
+temp/
+ytdl_*
+
+# === Configuration ===
+# 봇 토큰이나 포트 설정 등이 담긴 민감한 설정 파일 (이름이 다를 경우 수정 필요)
+config.json
