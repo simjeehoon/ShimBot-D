@@ -62,9 +62,6 @@ func main() {
 		dg.Close()
 	}()
 
-	// 💡 6. 파일 서버 시작 (디스코드 연결 성공 후 dg 세션을 넘겨서 실행)
-	utils.StartFileServer(dg)
-
 	// 7. 디스코드 서버에 슬래시 명령어 등록 (commands/base.go에 정의된 리스트 활용)
 	fmt.Println("[빗금 명령어] 일괄 동기화 중...")
 	cmds, err := dg.ApplicationCommandBulkOverwrite(dg.State.User.ID, "", utils.AllCommands)
