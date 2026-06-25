@@ -110,17 +110,20 @@ func MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	// 2️⃣ 채널 메시지 분기 처리 (switch-case 및 소문자 정형화 처리)
-	lowerContent := strings.ToLower(trimmedContent)
+	/*
+		// 2️⃣ 채널 메시지 분기 처리 (switch-case 및 소문자 정형화 처리)
+		lowerContent := strings.ToLower(trimmedContent)
 
-	switch lowerContent {
-	case "안녕":
-		s.ChannelMessageSend(m.ChannelID, "그래 잘 살고 있니?")
-	case "你好":
-		s.ChannelMessageSend(m.ChannelID, "你好！很高兴见到你。")
-	case "hello":
-		s.ChannelMessageSend(m.ChannelID, "Hello, how are you today?")
-	case "hello, world":
-		s.ChannelMessageSend(m.ChannelID, "참 아름다워라")
-	}
+		switch lowerContent {
+		case "안녕":
+			s.ChannelMessageSend(m.ChannelID, "그래 잘 살고 있니?")
+		case "你好":
+			s.ChannelMessageSend(m.ChannelID, "你好！很高兴见到你。")
+		case "hello":
+			s.ChannelMessageSend(m.ChannelID, "Hello, how are you today?")
+		case "hello, world":
+			s.ChannelMessageSend(m.ChannelID, "참 아름다워라")
+		}
+	*/
+
 }

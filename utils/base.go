@@ -11,12 +11,14 @@ var AllCommands = []*discordgo.ApplicationCommand{
 	//YtCommand,
 	//MtyCommand,
 	HelpCommand,
+	SdmCommand,
 }
 
 var CommandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
 	//"yt":   HandleYt,
 	//"mty":  HandleMty,
 	"help": HandleHelp,
+	"sdm":  HandleSdm,
 }
 
 var ButtonHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate, customID string){

@@ -22,7 +22,8 @@ func HandleHelp(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	// 📌 기본 명령어 섹션
 	sb.WriteString("⚙️ **명령어 안내(추가 예정**\n")
-	sb.WriteString("> `/help` : 현재로선 이게 전부입니다.\n\n")
+	sb.WriteString("> `/help` : 봇 사용법을 출력합니다.\n\n")
+	sb.WriteString("> `/sdm` : 사용자와 dm을 시작합니다. 입력 후 안내에 따라 진행하시면 됩니다.\n\n")
 
 	// 📌 DM 기반 핵심 동작 원리
 	sb.WriteString("📥 **DM 처리**\n")
