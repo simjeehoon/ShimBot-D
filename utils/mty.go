@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"ShimBot-D/config"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
@@ -23,42 +27,31 @@ type videoItem struct {
 	ID    string
 }
 
-var MtyCommand = &discordgo.ApplicationCommand{
-	Name:        "mty",
-	Description: "장문 글에서 개별 유튜브 URL들을 추출합니다. 10개씩 끊어서 출력합니다.",
-	Options: []*discordgo.ApplicationCommandOption{
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "content",
-			Description: "유튜브 주소(또는 재생목록)가 포함된 카톡 or 긴 텍스트",
-			Required:    true,
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "print_at",
-			Description: "출력 위치를 지정합니다. (기본값: 나만보기)",
-			Required:    false,
-			Choices: []*discordgo.ApplicationCommandOptionChoice{
-				{Name: "전체 공개", Value: "public"},
-				{Name: "나만 보기", Value: "private"},
-				{Name: "DM으로", Value: "dm"},
-			},
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionInteger,
-			Name:        "count",
-			Description: "출력할 URL의 최대 개수 (0 입력시 전부 출력, 기본값: 0)",
-			Required:    false,
-		},
-	},
-}
+// 💡 1. 상수를 활용하여 마법의 문자열(Magic String) 제거 및 기본 세팅 그룹화
+const (
+	pageSize    = 10
+	fallbackID  = "fallback_%d"
+	youtubeBase = "https://www.youtube.com/watch?v="
+)
 
-// 💡 데이터 경합 및 고루틴 안전성 확보를 위한 전역 RWMutex 추가
 var (
 	mtyGlobalStore = make(map[string][]videoItem)
 	mtyMutex       sync.RWMutex
+	ytIDPattern    = regexp.MustCompile(`(?:v=|embed/|shorts/|youtu\.be/)([a-zA-Z0-9_-]{11})`)
 )
 
+// generateSessionID는 16글자 Hex 문자열을 생성하여 세션 식별자로 사용합니다.
+func generateSessionID() string {
+	b := make([]byte, 8) // 16글자 Hex 문자열 획득
+	_, err := rand.Read(b)
+	if err != nil {
+		// 예외 상황 시 대체 수단으로 타임스탬프 기반 생성
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// formatVideoLine는 제한된 길이 내에서 영상 제목과 URL을 포맷팅하여 반환합니다.
 func formatVideoLine(idx int, title string, url string) string {
 	maxTitleBytes := 190 - len(url)
 	if maxTitleBytes < 30 {
@@ -74,83 +67,26 @@ func formatVideoLine(idx int, title string, url string) string {
 	return fmt.Sprintf("[%d] **%s**\n`%s`\n", idx, title, url)
 }
 
-func HandleMty(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	options := i.ApplicationCommandData().Options
-	optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-	for _, opt := range options {
-		optionMap[opt.Name] = opt
+// getYtdlpPath는 현재 운영체제에 맞는 yt-dlp 실행 파일 경로를 반환합니다.
+func getYtdlpPath() string {
+	venvDir := ".venv"
+	if runtime.GOOS == "windows" {
+		return filepath.Join(venvDir, "Scripts", "yt-dlp.exe")
 	}
-
-	content := optionMap["content"].StringValue()
-	printAt := "private"
-	count := 0
-
-	if opt, exists := optionMap["print_at"]; exists {
-		printAt = opt.StringValue()
-	}
-
-	if opt, exists := optionMap["count"]; exists {
-		count = int(opt.IntValue())
-		if count <= 0 {
-			count = -1
-		}
-	}
-
-	var responseFlags discordgo.MessageFlags
-	if printAt == "private" {
-		responseFlags = discordgo.MessageFlagsEphemeral
-	}
-
-	pattern := `https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s<>"]+`
-	re := regexp.MustCompile(pattern)
-	initialURLs := re.FindAllString(content, -1)
-
-	if len(initialURLs) == 0 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "❌ 입력하신 내용에서 Youtube URL을 찾지 못했습니다.",
-				Flags:   responseFlags,
-			},
-		})
-		return
-	}
-
-	if printAt == "dm" {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "📥 추출한 리스트를 DM(개인 메시지)으로 전송하고 있습니다...",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-	} else {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Flags: responseFlags,
-			},
-		})
-	}
-
-	userObj := i.User
-	if i.Member != nil {
-		userObj = i.Member.User
-	}
-
-	go ProcessMty(s, i.Interaction, userObj, initialURLs, count, printAt, responseFlags)
+	return filepath.Join(venvDir, "bin", "yt-dlp")
 }
 
-func ProcessMty(s *discordgo.Session, interaction *discordgo.Interaction, userObj *discordgo.User, urls []string, targetCount int, targetPrintAt string, flags discordgo.MessageFlags) {
-	var finalVideos []videoItem
+// 외부에서 호출하는 함수, 유튜브 URL 리스트를 받아서 각 URL을 처리하고, select menu와 버튼을 포함한 DM 메시지를 유저에게 전송합니다.
+func FetchVideos(s *discordgo.Session, userID string, urls []string) {
+	var videoItems []videoItem
 
 	for _, url := range urls {
 		if strings.Contains(url, "youtube.com/playlist") || strings.Contains(url, "&list=") {
-			playlistVideos, err := fetchPlaylistDetails(url)
+			playlistVideos, err := listToVideoItems(url)
 			if err != nil {
-				finalVideos = append(finalVideos, videoItem{Title: "⚠️ 재생목록 파싱 실패", URL: url, ID: ""})
+				videoItems = append(videoItems, videoItem{Title: "⚠️ 재생목록 파싱 실패", URL: url, ID: ""})
 			} else {
-				finalVideos = append(finalVideos, playlistVideos...)
+				videoItems = append(videoItems, playlistVideos...)
 			}
 		} else {
 			title, id, err := fetchVideoTitleAndID(url)
@@ -158,44 +94,48 @@ func ProcessMty(s *discordgo.Session, interaction *discordgo.Interaction, userOb
 				title = "⚠️ 제목 확인 불가"
 			}
 			if id == "" {
-				id = fmt.Sprintf("fallback_%d", len(finalVideos))
+				id = fmt.Sprintf(fallbackID, len(videoItems))
 			}
-			finalVideos = append(finalVideos, videoItem{Title: title, URL: url, ID: id})
+			videoItems = append(videoItems, videoItem{Title: title, URL: url, ID: id})
 		}
 	}
 
-	if len(finalVideos) == 0 {
-		errText := "❌ 유효한 유튜브 영상을 추출하지 못했습니다."
-		if targetPrintAt != "dm" {
-			s.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{Content: &errText})
-		}
+	dmChannel, err := s.UserChannelCreate(userID)
+	if err != nil {
+		log.Printf("DM 채널 생성 실패 (User: %s): %v", userID, err)
 		return
 	}
 
-	userID := userObj.ID
-
-	// 💡 쓰기 락 획득
-	mtyMutex.Lock()
-	mtyGlobalStore[userID] = finalVideos
-	mtyMutex.Unlock()
-
-	targetChannelID := interaction.ChannelID
-	if targetPrintAt == "dm" {
-		dmChannel, err := s.UserChannelCreate(userObj.ID)
-		if err != nil {
-			log.Printf("DM 채널 생성 실패: %v", err)
-			return
-		}
-		targetChannelID = dmChannel.ID
+	if len(videoItems) == 0 {
+		errText := "❌ 유효한 유튜브 영상을 추출하지 못했습니다."
+		_, _ = s.ChannelMessageSend(dmChannel.ID, errText)
+		return
 	}
 
-	RenderMtyDisplay(s, interaction, userID, finalVideos, 0, []string{}, targetPrintAt, targetChannelID)
+	// 💡 조합키 정의: 명확한 가독성을 제공하는 접두사 조합 (쉼표 구분 방식을 채택하여 _ 분리 영향 방지)
+	sessionID := generateSessionID()
+	storeKey := fmt.Sprintf("SID:%s,UID:%s", sessionID, userID)
+
+	mtyMutex.Lock()
+	mtyGlobalStore[storeKey] = videoItems
+	mtyMutex.Unlock()
+
+	// 만료시간 이후 세션 데이터를 제거하는 타이머 설정 (config.json에서 ExpirySeconds 값 활용)
+	time.AfterFunc(time.Duration(config.AppConfig.ExpirySeconds)*time.Second, func() {
+		mtyMutex.Lock()
+		delete(mtyGlobalStore, storeKey)
+		mtyMutex.Unlock()
+		log.Printf("[mty] %d초가 경과하여 세션 데이터 (%s)를 제거했습니다.", config.AppConfig.ExpirySeconds, storeKey)
+	})
+
+	// CustomID 연계를 위해 storeKey(조합키) 전체를 전달합니다.
+	RenderMtySelectMenu(s, nil, dmChannel.ID, storeKey, videoItems, 0, []string{}, "")
 }
 
-func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, userID string, allVideos []videoItem, page int, customSelectedIDs []string, printAt string, channelID string) {
-	pageSize := 10
-	totalVideos := len(allVideos)
-	totalPages := (totalVideos + pageSize - 1) / pageSize
+// RenderMtySelectMenu 로 컬 메시지 또는 Interaction 응답을 통해 선택 메뉴와 버튼을 포함한 유튜브 영상 리스트를 DM으로 전송합니다.
+func RenderMtySelectMenu(s *discordgo.Session, interaction *discordgo.Interaction, targetChannelID string, storeKey string, allVideos []videoItem, page int, customSelectedIDs []string, messageID string) {
+	totalVideosCnt := len(allVideos)
+	totalPages := (totalVideosCnt + pageSize - 1) / pageSize
 
 	if page < 0 {
 		page = 0
@@ -206,37 +146,41 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 
 	startIndex := page * pageSize
 	endIndex := startIndex + pageSize
-	if endIndex > totalVideos {
-		endIndex = totalVideos
+	if endIndex > totalVideosCnt {
+		endIndex = totalVideosCnt
 	}
 
 	currentPageVideos := allVideos[startIndex:endIndex]
 
-	// 💡 빈 슬라이스 수신 또는 nil 수신 시 기본 체크 처리 자동 생성
 	if len(customSelectedIDs) == 0 {
-		customSelectedIDs = []string{}
+		customSelectedIDs = make([]string, 0, len(currentPageVideos))
 		for i, v := range currentPageVideos {
 			if v.ID != "" {
 				customSelectedIDs = append(customSelectedIDs, v.ID)
 			} else {
-				customSelectedIDs = append(customSelectedIDs, fmt.Sprintf("fallback_%d", startIndex+i))
+				customSelectedIDs = append(customSelectedIDs, fmt.Sprintf(fallbackID, startIndex+i))
 			}
 		}
 	}
 
+	selectedMap := make(map[string]struct{}, len(customSelectedIDs))
+	for _, sid := range customSelectedIDs {
+		selectedMap[sid] = struct{}{}
+	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Page (%d/%d)** 총 **%d**개 리스트 전개\n\n", page+1, totalPages, totalVideos))
+	sb.WriteString(fmt.Sprintf("🎥 **Page (%d/%d)** (총 **%d**개)\n\n", page+1, totalPages, totalVideosCnt))
 	for idx, v := range currentPageVideos {
 		sb.WriteString(formatVideoLine(startIndex+idx+1, v.Title, v.URL))
 	}
-	sb.WriteString(fmt.Sprintf("**Page (%d/%d) 항목을 고르고 버튼을 눌러주세요** \n\n", page+1, totalPages))
+	sb.WriteString(fmt.Sprintf("🎥 **Page (%d/%d)** (총 **%d**개)\n\n", page+1, totalPages, totalVideosCnt))
 	contentText := sb.String()
 
 	var selectOptions []discordgo.SelectMenuOption
 	for i, v := range currentPageVideos {
 		fixedID := v.ID
 		if fixedID == "" {
-			fixedID = fmt.Sprintf("fallback_%d", startIndex+i)
+			fixedID = fmt.Sprintf(fallbackID, startIndex+i)
 		}
 
 		displayLabel := fmt.Sprintf("[%d] %s", startIndex+i+1, v.Title)
@@ -244,13 +188,7 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 			displayLabel = displayLabel[:97] + "..."
 		}
 
-		isDefault := false
-		for _, sid := range customSelectedIDs {
-			if fixedID == sid {
-				isDefault = true
-				break
-			}
-		}
+		_, isDefault := selectedMap[fixedID]
 
 		selectOptions = append(selectOptions, discordgo.SelectMenuOption{
 			Label:       displayLabel,
@@ -262,11 +200,12 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 
 	var components []discordgo.MessageComponent
 
+	// CustomID 규칙 정립: mty_select_{storeKey}_dm
 	if len(selectOptions) > 0 {
 		components = append(components, discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
 				discordgo.SelectMenu{
-					CustomID:    fmt.Sprintf("mty_select_%s_%s", userID, printAt),
+					CustomID:    fmt.Sprintf("mty_select_%s_dm", storeKey),
 					Placeholder: "📥 다운로드할 영상들을 선택/해제 하세요",
 					MinValues:   intPtr(1),
 					MaxValues:   len(selectOptions),
@@ -276,12 +215,13 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 		})
 	}
 
+	// 다운로드 버튼 포맷 규격화: mty_btn_{quality}_{page}_{storeKey}_dm
 	components = append(components, discordgo.ActionsRow{
 		Components: []discordgo.MessageComponent{
-			discordgo.Button{Label: "🎥 480p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_480p_%d_%s_%s", page, userID, printAt)},
-			discordgo.Button{Label: "🎥 720p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_720p_%d_%s_%s", page, userID, printAt)},
-			discordgo.Button{Label: "🎥 1080p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_1080p_%d_%s_%s", page, userID, printAt)},
-			discordgo.Button{Label: "🎵 MP3", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("mty_btn_mp3_%d_%s_%s", page, userID, printAt)},
+			discordgo.Button{Label: "🎥 480p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_480p_%d_%s_dm", page, storeKey)},
+			discordgo.Button{Label: "🎥 720p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_720p_%d_%s_dm", page, storeKey)},
+			discordgo.Button{Label: "🎥 1080p", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("mty_btn_1080p_%d_%s_dm", page, storeKey)},
+			discordgo.Button{Label: "🎵 MP3", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("mty_btn_mp3_%d_%s_dm", page, storeKey)},
 		},
 	})
 
@@ -291,46 +231,44 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 	}
 
 	nextPageLabel := "다음 (항목없음) ▶"
-	if endIndex < totalVideos {
+	if endIndex < totalVideosCnt {
 		nextPageLabel = fmt.Sprintf("다음 %d페이지 ▶", page+2)
 	}
 
+	// 내비게이션 버튼 포맷 규격화: mty_nav_{direction}_{targetPage}_{storeKey}_dm
 	components = append(components, discordgo.ActionsRow{
 		Components: []discordgo.MessageComponent{
 			discordgo.Button{
 				Label:    prevPageLabel,
 				Style:    discordgo.SecondaryButton,
-				CustomID: fmt.Sprintf("mty_nav_prev_%d_%s_%s", page-1, userID, printAt),
+				CustomID: fmt.Sprintf("mty_nav_prev_%d_%s_dm", page-1, storeKey),
 				Disabled: page == 0,
 			},
 			discordgo.Button{
 				Label:    nextPageLabel,
 				Style:    discordgo.SecondaryButton,
-				CustomID: fmt.Sprintf("mty_nav_next_%d_%s_%s", page+1, userID, printAt),
-				Disabled: endIndex >= totalVideos,
+				CustomID: fmt.Sprintf("mty_nav_next_%d_%s_dm", page+1, storeKey),
+				Disabled: endIndex >= totalVideosCnt,
 			},
 		},
 	})
 
-	if printAt == "dm" {
-		if interaction.Message == nil {
-			msg, err := s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+	if interaction == nil {
+		if messageID == "" { // 새 메시지 전송
+			_, _ = s.ChannelMessageSendComplex(targetChannelID, &discordgo.MessageSend{
 				Content:    contentText,
 				Components: components,
 			})
-			if err == nil {
-				interaction.Message = msg
-			}
-		} else {
-			s.ChannelMessageEditComplex(&discordgo.MessageEdit{
-				ID:         interaction.Message.ID,
-				Channel:    channelID,
+		} else { // 기존 메시지 수정
+			_, _ = s.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				ID:         messageID,
+				Channel:    targetChannelID,
 				Content:    &contentText,
 				Components: &components,
 			})
 		}
-	} else {
-		s.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{
+	} else { // Interaction 응답 수정
+		_, _ = s.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{
 			Content:    &contentText,
 			Components: &components,
 		})
@@ -338,21 +276,18 @@ func RenderMtyDisplay(s *discordgo.Session, interaction *discordgo.Interaction, 
 }
 
 func HandleMtySelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
-	// 💡 Deferred 처리로 변경하여 즉각 피드백 제공 및 먹통 방지
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
 
+	// 💡 "mty_select_" 접두사와 뒤의 "_dm" 접미사를 걷어내면 순수한 storeKey가 원형 복원됩니다.
 	raw := strings.TrimPrefix(customID, "mty_select_")
-	parts := strings.Split(raw, "_")
-	userID := parts[0]
-	printAt := parts[1]
+	storeKey := strings.TrimSuffix(raw, "_dm")
 
 	selectedIDs := i.MessageComponentData().Values
 
-	// 💡 읽기 락 획득
 	mtyMutex.RLock()
-	allVideos, exists := mtyGlobalStore[userID]
+	allVideos, exists := mtyGlobalStore[storeKey]
 	mtyMutex.RUnlock()
 
 	if !exists {
@@ -364,6 +299,8 @@ func HandleMtySelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate, c
 		if btnRow, ok := i.Message.Components[1].(*discordgo.ActionsRow); ok && len(btnRow.Components) > 0 {
 			if btn, ok := btnRow.Components[0].(*discordgo.Button); ok {
 				p := strings.Split(btn.CustomID, "_")
+				// 버튼 포맷: mty_btn_480p_{page}_{storeKey}_dm
+				// _로 스플릿 시 앞쪽 고정 인덱스 3번이 무조건 page 번호가 됩니다.
 				if len(p) >= 4 {
 					currentPage, _ = strconv.Atoi(p[3])
 				}
@@ -371,47 +308,56 @@ func HandleMtySelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate, c
 		}
 	}
 
-	RenderMtyDisplay(s, i.Interaction, userID, allVideos, currentPage, selectedIDs, printAt, i.ChannelID)
+	RenderMtySelectMenu(s, i.Interaction, i.ChannelID, storeKey, allVideos, currentPage, selectedIDs, "")
 }
 
 func HandleMtyNavigation(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
-	// 💡 Deferred 처리로 변경하여 즉각 피드백 제공 및 먹통 방지
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
 
-	parts := strings.Split(customID, "_")
-	if len(parts) < 6 {
+	// 포맷: mty_nav_{prev/next}_{targetPage}_{storeKey}_dm
+	// 정규 필터를 거치기 위해 접두사와 접미사를 먼저 정제합니다.
+	raw := strings.TrimPrefix(customID, "mty_nav_")
+	raw = strings.TrimSuffix(raw, "_dm")
+
+	// 남은 덩어리: {prev/next}_{targetPage}_{storeKey}
+	// storeKey 내부에는 쉼표(,)가 있으므로 언더바(_) 분리가 유효합니다.
+	parts := strings.SplitN(raw, "_", 3)
+	if len(parts) < 3 {
 		return
 	}
-	targetPage, _ := strconv.Atoi(parts[3])
-	userID := parts[4]
-	printAt := parts[5]
 
-	// 💡 읽기 락 획득
+	targetPage, _ := strconv.Atoi(parts[1])
+	storeKey := parts[2] // 복원된 "SID:...,UID:..."
+
 	mtyMutex.RLock()
-	allVideos, exists := mtyGlobalStore[userID]
+	allVideos, exists := mtyGlobalStore[storeKey]
 	mtyMutex.RUnlock()
 
 	if !exists {
-		errText := "❌ 만료된 세션이거나 임시 데이터를 찾을 수 없습니다. 명령어를 다시 시도해주세요."
-		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		errText := "❌ 만료된 세션이거나 데이터를 찾을 수 없습니다."
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 			Content:    &errText,
 			Components: &[]discordgo.MessageComponent{},
 		})
 		return
 	}
 
-	// 페이지를 바꿀 때는 선택 항목 상태 배열을 빈 리스트([]string{})로 넘겨 전체 선택을 재유도합니다.
-	RenderMtyDisplay(s, i.Interaction, userID, allVideos, targetPage, []string{}, printAt, i.ChannelID)
+	RenderMtySelectMenu(s, i.Interaction, i.ChannelID, storeKey, allVideos, targetPage, []string{}, "")
 }
 
 func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
-	dataStr := strings.TrimPrefix(customID, "mty_btn_")
-	parts := strings.Split(dataStr, "_")
+	// 포맷: mty_btn_{quality}_{page}_{storeKey}_dm
+	raw := strings.TrimPrefix(customID, "mty_btn_")
+	raw = strings.TrimSuffix(raw, "_dm")
 
+	// 남은 덩어리: {quality}_{page}_{storeKey}
+	parts := strings.SplitN(raw, "_", 3)
+	if len(parts) < 3 {
+		return
+	}
 	quality := parts[0]
-	printAt := parts[3]
 
 	var videoIDs []string
 	if len(i.Message.Components) > 0 {
@@ -427,7 +373,7 @@ func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreat
 	}
 
 	if len(videoIDs) == 0 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Content: "❌ 선택된 영상이 없거나 양식을 읽지 못했습니다. 체크박스를 다시 확인해 주세요.",
@@ -436,16 +382,10 @@ func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreat
 		return
 	}
 
-	var responseFlags discordgo.MessageFlags
-	if printAt != "dm" && printAt == "private" {
-		responseFlags = discordgo.MessageFlagsEphemeral
-	}
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("⏬ 선택하신 총 **%d개**의 영상 다운로드를 대기열에 접수했습니다! (품질: `%s`)", len(videoIDs), quality),
-			Flags:   responseFlags,
+			Content: fmt.Sprintf("⏬ 총 **%d개**의 영상을 다운로드하겠습니다. (품질: `%s`)", len(videoIDs), quality),
 		},
 	})
 
@@ -465,7 +405,7 @@ func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreat
 		if strings.HasPrefix(id, "fallback_") || strings.HasPrefix(id, "unknown_") {
 			fullURL = id
 		} else {
-			fullURL = "https://www.youtube.com/watch?v=" + id
+			fullURL = youtubeBase + id
 		}
 
 		mockMsg := &discordgo.MessageCreate{
@@ -475,21 +415,17 @@ func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreat
 			},
 		}
 
+		// (참고: 외부에서 선언된 실제 가동부 함수 호출)
 		go ProcessYoutubeDownloadForMessage(s, mockMsg, fullURL, quality)
+		_ = mockMsg // 미사용 방지용 예시 처리
+		log.Printf("[Queue] URL 제출 완료: %s (%s)", fullURL, quality)
 	}
 }
 
 func fetchVideoTitleAndID(videoURL string) (string, string, error) {
-	venvDir := ".venv"
-	var ytdlpPath string
-	if runtime.GOOS == "windows" {
-		ytdlpPath = filepath.Join(venvDir, "Scripts", "yt-dlp.exe")
-	} else {
-		ytdlpPath = filepath.Join(venvDir, "bin", "yt-dlp")
-	}
+	ytdlpPath := getYtdlpPath()
 
-	idPattern := regexp.MustCompile(`(?:v=|embed/|shorts/|youtu\.be/)([a-zA-Z0-9_-]{11})`)
-	idMatch := idPattern.FindStringSubmatch(videoURL)
+	idMatch := ytIDPattern.FindStringSubmatch(videoURL)
 	extractedID := ""
 	if len(idMatch) > 1 {
 		extractedID = idMatch[1]
@@ -507,14 +443,8 @@ func fetchVideoTitleAndID(videoURL string) (string, string, error) {
 	return strings.TrimSpace(stdout.String()), extractedID, nil
 }
 
-func fetchPlaylistDetails(playlistURL string) ([]videoItem, error) {
-	venvDir := ".venv"
-	var ytdlpPath string
-	if runtime.GOOS == "windows" {
-		ytdlpPath = filepath.Join(venvDir, "Scripts", "yt-dlp.exe")
-	} else {
-		ytdlpPath = filepath.Join(venvDir, "bin", "yt-dlp")
-	}
+func listToVideoItems(playlistURL string) ([]videoItem, error) {
+	ytdlpPath := getYtdlpPath()
 
 	args := []string{"--flat-playlist", "--print", "%(title)s\t%(id)s", playlistURL}
 	cmd := exec.Command(ytdlpPath, args...)
@@ -533,7 +463,7 @@ func fetchPlaylistDetails(playlistURL string) ([]videoItem, error) {
 	}
 
 	lines := strings.Split(output, "\n")
-	var results []videoItem
+	results := make([]videoItem, 0, len(lines))
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -548,7 +478,7 @@ func fetchPlaylistDetails(playlistURL string) ([]videoItem, error) {
 
 			results = append(results, videoItem{
 				Title: title,
-				URL:   fmt.Sprintf("https://www.youtube.com/watch?v=%s", id),
+				URL:   youtubeBase + id,
 				ID:    id,
 			})
 		}

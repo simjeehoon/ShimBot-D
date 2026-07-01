@@ -1,7 +1,7 @@
 package messages
 
 import (
-	"fmt"
+	"ShimBot-D/utils"
 	"regexp"
 	"strings"
 
@@ -14,74 +14,41 @@ var (
 	IsDebugMode = true
 )
 
-// 디버그 함수
-func DebugSend(s *discordgo.Session, m *discordgo.MessageCreate, channelID, message string) {
-	if IsDebugMode {
-		s.ChannelMessageSend(channelID, message)
-	}
-}
-
-// DM 채널 생성 및 가져오기
-func getOrCreateDMChannel(s *discordgo.Session, userID string) (string, error) {
-	dm, err := s.UserChannelCreate(userID)
+func send(s *discordgo.Session, m *discordgo.MessageCreate, message string) error {
+	dm, err := s.UserChannelCreate(m.Author.ID)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return dm.ID, nil
-}
 
-// 유튜브 영상 URL에서 플레이리스트 파라미터 제거
-func stripPlaylistParam(url string) string {
-	if strings.Contains(url, "watch?v=") && strings.Contains(url, "&list=") {
-		return strings.Split(url, "&list=")[0]
+	if IsDebugMode {
+		_, err = s.ChannelMessageSend(dm.ID, message)
+		if err != nil {
+			return err
+		}
 	}
-	return url
+	return nil
 }
 
 // 단일 영상 처리
 func handleSingleVideo(s *discordgo.Session, m *discordgo.MessageCreate, url, option string) {
-	videoURL := stripPlaylistParam(url)
-
-	normalizeOption := func(opt string) string {
-		switch opt {
-		case "1080", "1080p":
-			return "1080p"
-		case "480", "480p":
-			return "480p"
-		case "mp3":
-			return "mp3"
-		default:
-			return "720p" // 기본값 720p
-		}
+	// URL에서 재생목록 파라미터 제거
+	if strings.Contains(url, "watch?v=") && strings.Contains(url, "&list=") {
+		url = strings.Split(url, "&list=")[0]
 	}
 
-	option = normalizeOption(option)
-
-	channelID, err := getOrCreateDMChannel(s, m.Author.ID)
-	if err != nil {
-		return
+	// 옵션 처리
+	switch option {
+	case "1080", "1080p":
+		option = "1080p"
+	case "480", "480p":
+		option = "480p"
+	case "mp3":
+		option = "mp3"
+	default:
+		option = "720p" // 기본값 720p
 	}
 
-	DebugSend(s, m, channelID, fmt.Sprintf("개별영상, URL: %s, 옵션: %s", videoURL, option))
-	//go utils.ProcessYoutubeDownloadForMessage(s, m, videoURL, option)
-}
-
-// 다중 영상 처리
-func handleMultiVideo(s *discordgo.Session, m *discordgo.MessageCreate, urls []string) {
-	channelID, err := getOrCreateDMChannel(s, m.Author.ID)
-	if err != nil {
-		return
-	}
-
-	var cleanedURLs []string
-	for _, url := range urls {
-		cleanedURLs = append(cleanedURLs, stripPlaylistParam(url))
-	}
-
-	joinedURLs := strings.Join(cleanedURLs, "\n")
-	DebugSend(s, m, channelID, fmt.Sprintf("다중영상, URL: %s", joinedURLs))
-	//dummyInteraction := &discordgo.Interaction{ChannelID: channelID, Token: "msg_dm_" + m.ID}
-	//go utils.ProcessMty(s, dummyInteraction, m.Author, cleanedURLs, 0, "dm", 0)
+	go utils.ProcessYoutubeDownloadForMessage(s, m, url, option)
 }
 
 // 메인 플로우
@@ -104,7 +71,8 @@ func MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// 2. 다중 URL 추출 처리
 	if allURLs := anyRegex.FindAllString(trimmedContent, -1); len(allURLs) > 0 {
-		handleMultiVideo(s, m, allURLs)
+		send(s, m, "👨‍💻 텍스트에서 개별 유튜브 영상을 분석할게요...")
+		go utils.FetchVideos(s, m.Author.ID, allURLs)
 		return
 	}
 }
