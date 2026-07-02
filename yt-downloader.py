@@ -42,7 +42,7 @@ def download_video(url, out_path, resolution):
         'progress_hooks': [progress_hook],
         'quiet': True,
         'noprogress': True,
-        'no_cache_dir': True,              # 👈 1. 캐시 폴더 사용 안 함 (에러 방지)
+        'no_cache_dir': True,              
         'ignoreerrors': True,
     }
 
@@ -79,7 +79,6 @@ def download_video(url, out_path, resolution):
             'outtmpl': out_path,
             'merge_output_format': 'mp4',
             
-            # 💡 [핵심 해결책] 
             # 임시 파일(temp.mp4)을 만들 때 오류를 내는 주원인인 오디오 코덱(Opus)을
             # MP4 전용 표준 코덱인 'aac'로 강제 변환(재인코딩)하면서 병합하도록 지시합니다.
             'postprocessor_args': {
@@ -119,11 +118,10 @@ def download_video(url, out_path, resolution):
                 }
                 print(f"METADATA:{json.dumps(meta)}", end="\n", flush=True)
 
-                # 💡 다운로드 전에 미리 예상 최종 파일명을 뱉어줍니다.
                 actual_filename = os.path.basename(ydl.prepare_filename(info))
                 if resolution.lower() == "mp3" and not actual_filename.endswith('.mp3'):
                     actual_filename = os.path.splitext(actual_filename)[0] + '.mp3'
-                print(f"SUCCESS:{actual_filename}", flush=True)
+                print(f"FILENAME:{actual_filename}", flush=True)
                 
             except DownloadStopException:
                 if timer: timer.cancel()
