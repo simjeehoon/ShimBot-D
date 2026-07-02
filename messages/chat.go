@@ -29,28 +29,6 @@ func send(s *discordgo.Session, m *discordgo.MessageCreate, message string) erro
 	return nil
 }
 
-// 단일 영상 처리
-func handleSingleVideo(s *discordgo.Session, m *discordgo.MessageCreate, url, option string) {
-	// URL에서 재생목록 파라미터 제거
-	if strings.Contains(url, "watch?v=") && strings.Contains(url, "&list=") {
-		url = strings.Split(url, "&list=")[0]
-	}
-
-	// 옵션 처리
-	switch option {
-	case "1080", "1080p":
-		option = "1080p"
-	case "480", "480p":
-		option = "480p"
-	case "mp3":
-		option = "mp3"
-	default:
-		option = "720p" // 기본값 720p
-	}
-
-	go utils.ProcessYoutubeDownloadForMessage(s, m, url, option)
-}
-
 // 메인 플로우
 func MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.GuildID != "" {
@@ -58,14 +36,33 @@ func MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if m.Author.ID == s.State.User.ID {
-		return // 자기 자신의 메시지는 무시
+		return // 자기 자신의 메시지는 무시합니다
 	}
 
 	trimmedContent := strings.TrimSpace(m.Content)
 
 	// 1. 단일 영상 처리
 	if matches := strictRegex.FindStringSubmatch(trimmedContent); matches != nil {
-		handleSingleVideo(s, m, matches[1], matches[2])
+		url := matches[1]
+
+		if strings.Contains(url, "watch?v=") && strings.Contains(url, "&list=") {
+			url = strings.Split(url, "&list=")[0]
+		}
+
+		option := matches[2]
+		// 옵션 처리
+		switch option {
+		case "1080", "1080p":
+			option = "1080p"
+		case "480", "480p":
+			option = "480p"
+		case "mp3":
+			option = "mp3"
+		default:
+			option = "720p" // 기본값 720p
+		}
+
+		go utils.ProcessYoutubeDownloadForMessage(s, m, url, option)
 		return
 	}
 

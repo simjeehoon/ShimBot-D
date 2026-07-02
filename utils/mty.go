@@ -40,6 +40,15 @@ var (
 	ytIDPattern    = regexp.MustCompile(`(?:v=|embed/|shorts/|youtu\.be/)([a-zA-Z0-9_-]{11})`)
 )
 
+// getYtdlpPath는 현재 운영체제에 맞는 yt-dlp 실행 파일 경로를 반환합니다.
+func getYtdlpPath() string {
+	venvDir := ".venv"
+	if runtime.GOOS == "windows" {
+		return filepath.Join(venvDir, "Scripts", "yt-dlp.exe")
+	}
+	return filepath.Join(venvDir, "bin", "yt-dlp")
+}
+
 // generateSessionID는 16글자 Hex 문자열을 생성하여 세션 식별자로 사용합니다.
 func generateSessionID() string {
 	b := make([]byte, 8) // 16글자 Hex 문자열 획득
@@ -65,15 +74,6 @@ func formatVideoLine(idx int, title string, url string) string {
 		title += "..."
 	}
 	return fmt.Sprintf("[%d] **%s**\n`%s`\n", idx, title, url)
-}
-
-// getYtdlpPath는 현재 운영체제에 맞는 yt-dlp 실행 파일 경로를 반환합니다.
-func getYtdlpPath() string {
-	venvDir := ".venv"
-	if runtime.GOOS == "windows" {
-		return filepath.Join(venvDir, "Scripts", "yt-dlp.exe")
-	}
-	return filepath.Join(venvDir, "bin", "yt-dlp")
 }
 
 // 외부에서 호출하는 함수, 유튜브 URL 리스트를 받아서 각 URL을 처리하고, select menu와 버튼을 포함한 DM 메시지를 유저에게 전송합니다.
@@ -415,10 +415,7 @@ func HandleMtyDownloadButton(s *discordgo.Session, i *discordgo.InteractionCreat
 			},
 		}
 
-		// (참고: 외부에서 선언된 실제 가동부 함수 호출)
 		go ProcessYoutubeDownloadForMessage(s, mockMsg, fullURL, quality)
-		_ = mockMsg // 미사용 방지용 예시 처리
-		log.Printf("[Queue] URL 제출 완료: %s (%s)", fullURL, quality)
 	}
 }
 
